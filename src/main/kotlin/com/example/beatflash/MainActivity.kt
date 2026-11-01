@@ -7,10 +7,12 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.TextView
 import com.example.beatflash.flash.TorchController
 import com.example.beatflash.ui.SpectrumView
@@ -28,7 +30,12 @@ class MainActivity : Activity(), BeatEngine.Listener {
     private lateinit var status: TextView
     private lateinit var details: TextView
     private lateinit var startButton: Button
+    private lateinit var standardButton: Button
+    private lateinit var simpleButton: Button
+    private lateinit var thresholdLabel: TextView
+    private lateinit var thresholdSlider: SeekBar
     private lateinit var spectrum: SpectrumView
+    private var mode = ProcessingMode.STANDARD
     private var engine: BeatEngine? = null
     private var torch: TorchController? = null
 
@@ -39,6 +46,22 @@ class MainActivity : Activity(), BeatEngine.Listener {
         startButton.setOnClickListener {
             if (engine?.isRunning() == true) stopListening() else requestAndStart()
         }
+        standardButton.setOnClickListener { selectMode(ProcessingMode.STANDARD) }
+        simpleButton.setOnClickListener { selectMode(ProcessingMode.SIMPLE) }
+        thresholdSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                val level = progress / 100.0
+                thresholdLabel.text = String.format(
+                    Locale.US,
+                    "Порог вспышки: %.2f\n0 — любой писк, 1 — почти никогда",
+                    level
+                )
+                engine?.setSimpleThreshold(level)
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar) = Unit
+        })
         requestAndStart()
     }
 
@@ -53,21 +76,35 @@ class MainActivity : Activity(), BeatEngine.Listener {
         }
 
         status = TextView(this).apply {
-            text = "РћР¶РёРґР°РЅРёРµ СЂР°Р·СЂРµС€РµРЅРёР№вЂ¦"
+            text = "Ожидание разрешений…"
             textSize = 22f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             typeface = Typeface.DEFAULT_BOLD
         }
         details = TextView(this).apply {
-            text = "PLP Рё РєРѕСЂСЂРµР»СЏС†РёСЏ РЅР°С‡РЅСѓС‚ СЂР°Р±РѕС‚Р°С‚СЊ РїРѕСЃР»Рµ РЅР°РєРѕРїР»РµРЅРёСЏ Р·РІСѓРєР°"
+            text = "Стандартный обработчик оценивает темп после накопления звука."
             textSize = 15f
             setTextColor(Color.rgb(185, 200, 220))
             gravity = Gravity.CENTER
             setPadding(0, padding / 2, 0, padding)
         }
         spectrum = SpectrumView(this)
-        startButton = Button(this).apply { text = "РќР°С‡Р°С‚СЊ СЃР»СѓС€Р°С‚СЊ" }
+        standardButton = Button(this).apply { text = "стандартный обработчик" }
+        simpleButton = Button(this).apply { text = "тупой обработчик" }
+        thresholdLabel = TextView(this).apply {
+            text = "Порог вспышки: 0.50\n0 — любой писк, 1 — почти никогда"
+            textSize = 14f
+            setTextColor(Color.rgb(185, 200, 220))
+            gravity = Gravity.CENTER
+        }
+        thresholdSlider = SeekBar(this).apply {
+            max = 100
+            progress = 50
+            contentDescription = "Порог вспышки тупого обработчика"
+        }
+        startButton = Button(this).apply { text = "Начать слушать" }
+        updateModeButtons()
 
         root.addView(status, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -82,11 +119,41 @@ class MainActivity : Activity(), BeatEngine.Listener {
             0,
             1f
         ))
+        root.addView(standardButton, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+        root.addView(simpleButton, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+        root.addView(thresholdLabel, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+        root.addView(thresholdSlider, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
         root.addView(startButton, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         ))
         setContentView(root)
+    }
+
+    private fun updateModeButtons() {
+        standardButton.isEnabled = mode != ProcessingMode.STANDARD
+        simpleButton.isEnabled = mode != ProcessingMode.SIMPLE
+        thresholdLabel.visibility = if (mode == ProcessingMode.SIMPLE) View.VISIBLE else View.GONE
+        thresholdSlider.visibility = if (mode == ProcessingMode.SIMPLE) View.VISIBLE else View.GONE
+    }
+
+    private fun selectMode(selected: ProcessingMode) {
+        if (mode == selected && engine?.isRunning() == true) return
+        mode = selected
+        updateModeButtons()
+        requestAndStart()
     }
 
     private fun hasPermissions(): Boolean = REQUIRED_PERMISSIONS.all {
@@ -104,19 +171,20 @@ class MainActivity : Activity(), BeatEngine.Listener {
     private fun startListening() {
         stopListening()
         torch = TorchController(this)
-        engine = BeatEngine(this)
+        engine = BeatEngine(this, mode)
+        engine?.setSimpleThreshold(thresholdSlider.progress / 100.0)
         if (engine?.start() == true) {
-            startButton.text = "РћСЃС‚Р°РЅРѕРІРёС‚СЊ"
-            status.text = "РЎР»СѓС€Р°СЋ РјРёРєСЂРѕС„РѕРЅ"
-            details.text = if (torch?.isAvailable == true) {
-                "Р¤РѕРЅР°СЂРёРє РіРѕС‚РѕРІ. Р”Р»СЏ РїРµСЂРІРѕР№ РѕС†РµРЅРєРё РЅСѓР¶РЅРѕ РѕРєРѕР»Рѕ 2 СЃРµРєСѓРЅРґ."
-            } else {
-                "Р¤РѕРЅР°СЂРёРє РЅРµ РЅР°Р№РґРµРЅ, Р°РЅР°Р»РёР· Р·РІСѓРєР° РїСЂРѕРґРѕР»Р¶Р°РµС‚ СЂР°Р±РѕС‚Р°С‚СЊ."
+            startButton.text = "Остановить"
+            status.text = if (mode == ProcessingMode.SIMPLE) "Тупой обработчик" else "Слушаю микрофон"
+            details.text = when {
+                torch?.isAvailable != true -> "Фонарик не найден, анализ звука продолжается."
+                mode == ProcessingMode.SIMPLE -> "Вспышка при резком усилении звука, без оценки BPM."
+                else -> "Фонарик готов. Для первой оценки темпа нужно около 2 секунд."
             }
         } else {
             engine?.close()
             engine = null
-            startButton.text = "РџРѕРІС‚РѕСЂРёС‚СЊ"
+            startButton.text = "Повторить"
         }
     }
 
@@ -125,7 +193,7 @@ class MainActivity : Activity(), BeatEngine.Listener {
         engine = null
         torch?.close()
         torch = null
-        if (::startButton.isInitialized) startButton.text = "РќР°С‡Р°С‚СЊ СЃР»СѓС€Р°С‚СЊ"
+        if (::startButton.isInitialized) startButton.text = "Начать слушать"
     }
 
     override fun onRequestPermissionsResult(
@@ -138,31 +206,43 @@ class MainActivity : Activity(), BeatEngine.Listener {
         if (hasPermissions()) {
             startListening()
         } else {
-            status.text = "РќРµС‚ РґРѕСЃС‚СѓРїР° Рє РјРёРєСЂРѕС„РѕРЅСѓ РёР»Рё С„РѕРЅР°СЂРёРєСѓ"
-            details.text = "Р Р°Р·СЂРµС€РёС‚Рµ РјРёРєСЂРѕС„РѕРЅ Рё РєР°РјРµСЂСѓ РІ РЅР°СЃС‚СЂРѕР№РєР°С… Android."
+            status.text = "Нет доступа к микрофону или фонарику"
+            details.text = "Разрешите микрофон и камеру в настройках Android."
         }
     }
 
     override fun onState(state: LiveState) {
         runOnUiThread {
             val beat = state.beat
-            status.text = String.format(
-                Locale.US,
-                "PLP %.0f / Corr %.0f BPM",
-                beat.plpBpm,
-                beat.correlationBpm
-            )
-            details.text = String.format(
-                Locale.US,
-                "confidence %.2f  (PLP %.2f, corr %.2f)\n" +
-                    "RMS %.3f  gate %.2f  threshold %.3f",
-                beat.confidence,
-                beat.plpConfidence,
-                beat.correlationConfidence,
-                state.gate.inputRms,
-                state.gate.gain,
-                state.gate.threshold
-            )
+            if (beat == null) {
+                if (mode != ProcessingMode.SIMPLE) return@runOnUiThread
+                status.text = "Тупой обработчик"
+                details.text = String.format(
+                    Locale.US,
+                    "RMS %.3f  порог вспышки %.3f",
+                    state.gate.inputRms,
+                    state.transientThreshold
+                )
+            } else {
+                if (mode != ProcessingMode.STANDARD) return@runOnUiThread
+                status.text = String.format(
+                    Locale.US,
+                    "PLP %.0f / Corr %.0f BPM",
+                    beat.plpBpm,
+                    beat.correlationBpm
+                )
+                details.text = String.format(
+                    Locale.US,
+                    "confidence %.2f  (PLP %.2f, corr %.2f)\n" +
+                        "RMS %.3f  gate %.2f  threshold %.3f",
+                    beat.confidence,
+                    beat.plpConfidence,
+                    beat.correlationConfidence,
+                    state.gate.inputRms,
+                    state.gate.gain,
+                    state.gate.threshold
+                )
+            }
         }
     }
 
@@ -176,7 +256,7 @@ class MainActivity : Activity(), BeatEngine.Listener {
 
     override fun onError(message: String) {
         runOnUiThread {
-            status.text = "РћС€РёР±РєР° РјРёРєСЂРѕС„РѕРЅР°"
+            status.text = "Ошибка микрофона"
             details.text = message
         }
     }
@@ -191,4 +271,3 @@ class MainActivity : Activity(), BeatEngine.Listener {
         super.onDestroy()
     }
 }
-

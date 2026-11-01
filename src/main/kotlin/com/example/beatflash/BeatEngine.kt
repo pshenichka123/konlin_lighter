@@ -7,15 +7,22 @@ import com.example.beatflash.dsp.AdaptiveNoiseGate
 import com.example.beatflash.dsp.Fft
 import com.example.beatflash.dsp.GateState
 import com.example.beatflash.dsp.SpectrumNormalizer
+import com.example.beatflash.dsp.TransientFlashDetector
 import kotlin.math.PI
 import kotlin.math.cos
 
 data class LiveState(
-    val beat: BeatState,
-    val gate: GateState
+    val beat: BeatState?,
+    val gate: GateState,
+    val transientThreshold: Double = 0.0
 )
 
-class BeatEngine(private val listener: Listener) : AutoCloseable {
+enum class ProcessingMode { STANDARD, SIMPLE }
+
+class BeatEngine(
+    private val listener: Listener,
+    private val mode: ProcessingMode = ProcessingMode.STANDARD
+) : AutoCloseable {
     interface Listener {
         fun onState(state: LiveState)
         fun onSpectrum(values: FloatArray)
@@ -37,6 +44,7 @@ class BeatEngine(private val listener: Listener) : AutoCloseable {
     private val frame = FloatArray(FFT_SIZE)
     private val tracker = RealtimeBeatTracker(SAMPLE_RATE, FFT_SIZE, HOP_SIZE)
     private val gate = AdaptiveNoiseGate(SAMPLE_RATE)
+    private val transientDetector = TransientFlashDetector(SAMPLE_RATE)
     private val spectrum = SpectrumNormalizer(SAMPLE_RATE, FFT_SIZE)
     private val microphone = MicrophoneSource(SAMPLE_RATE, ::onSamples, listener::onError)
     private var pending = FloatArray(FFT_SIZE * 4)
@@ -46,9 +54,15 @@ class BeatEngine(private val listener: Listener) : AutoCloseable {
 
     fun start(): Boolean = microphone.start()
     fun isRunning(): Boolean = microphone.isRunning()
+    fun setSimpleThreshold(value: Double) = transientDetector.setThresholdLevel(value)
 
     private fun onSamples(samples: FloatArray) {
         gateState = gate.analyze(samples)
+        if (mode == ProcessingMode.SIMPLE) {
+            val transient = transientDetector.process(samples.size, gateState.inputRms)
+            listener.onState(LiveState(null, gateState, transient.threshold))
+            if (transient.flash) listener.onFlash()
+        }
         ensureCapacity(pendingSize + samples.size)
         samples.copyInto(pending, pendingSize)
         pendingSize += samples.size
@@ -56,14 +70,16 @@ class BeatEngine(private val listener: Listener) : AutoCloseable {
         while (pendingSize >= FFT_SIZE) {
             pending.copyInto(frame, endIndex = FFT_SIZE)
             fft.magnitudes(frame, fftWindow, magnitudes)
-            val beatState = tracker.processSpectrum(magnitudes, gateState.gain)
             processedFrames++
 
             if (processedFrames % 3L == 0L) listener.onSpectrum(spectrum.process(magnitudes))
-            if (processedFrames % 10L == 0L || beatState.flash) {
-                listener.onState(LiveState(beatState, gateState))
+            if (mode == ProcessingMode.STANDARD) {
+                val beatState = tracker.processSpectrum(magnitudes, gateState.gain)
+                if (processedFrames % 10L == 0L || beatState.flash) {
+                    listener.onState(LiveState(beatState, gateState))
+                }
+                if (beatState.flash) listener.onFlash()
             }
-            if (beatState.flash) listener.onFlash()
 
             System.arraycopy(pending, HOP_SIZE, pending, 0, pendingSize - HOP_SIZE)
             pendingSize -= HOP_SIZE

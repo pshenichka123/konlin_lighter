@@ -1,5 +1,6 @@
 package com.example.beatflash.beat
 
+import com.example.beatflash.TEMPO_ANALYSIS_INTERVAL_MS
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -31,7 +32,10 @@ class RealtimeBeatTracker(
 
     private val noveltyRate = sampleRate.toDouble() / hopSize
     private val windowSize = (noveltyRate * 4.0).roundToInt().let { if (it % 2 == 0) it + 1 else it }
-    private val analysisHop = max(1, (noveltyRate / 10.0).roundToInt())
+    private val analysisHop = max(
+        1,
+        (noveltyRate * TEMPO_ANALYSIS_INTERVAL_MS / 1_000.0).roundToInt()
+    )
     private val novelty = DoubleArray(windowSize)
     private var noveltyWrite = 0
     private var noveltyCount = 0

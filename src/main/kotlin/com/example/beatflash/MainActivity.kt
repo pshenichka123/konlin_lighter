@@ -179,7 +179,7 @@ class MainActivity : Activity(), BeatEngine.Listener {
             details.text = when {
                 torch?.isAvailable != true -> "Фонарик не найден, анализ звука продолжается."
                 mode == ProcessingMode.SIMPLE -> "Вспышка при резком усилении звука, без оценки BPM."
-                else -> "Фонарик готов. Для первой оценки темпа нужно около 2 секунд."
+                else -> "Фонарик готов. BPM — примерно через 2 секунды; вспышки после поиска повторяющегося рисунка."
             }
         } else {
             engine?.close()
@@ -231,13 +231,23 @@ class MainActivity : Activity(), BeatEngine.Listener {
                     beat.plpBpm,
                     beat.correlationBpm
                 )
+                val patternText = if (beat.patternPeriodSeconds > 0.0) {
+                    String.format(
+                        Locale.US,
+                        "Повтор %.2f с, сходство %.2f",
+                        beat.patternPeriodSeconds,
+                        beat.patternSimilarity
+                    )
+                } else "Повтор: поиск…"
                 details.text = String.format(
                     Locale.US,
                     "confidence %.2f  (PLP %.2f, corr %.2f)\n" +
+                        "%s\n" +
                         "RMS %.3f  gate %.2f  threshold %.3f",
                     beat.confidence,
                     beat.plpConfidence,
                     beat.correlationConfidence,
+                    patternText,
                     state.gate.inputRms,
                     state.gate.gain,
                     state.gate.threshold

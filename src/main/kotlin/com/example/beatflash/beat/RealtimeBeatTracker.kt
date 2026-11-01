@@ -2,7 +2,6 @@ package com.example.beatflash.beat
 
 import com.example.beatflash.TEMPO_ANALYSIS_INTERVAL_MS
 import kotlin.math.PI
-import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.ln1p
 import kotlin.math.max
@@ -16,7 +15,9 @@ data class BeatState(
     val confidence: Double = 0.0,
     val plpConfidence: Double = 0.0,
     val correlationConfidence: Double = 0.0,
-    val flash: Boolean = false
+    val flash: Boolean = false,
+    val patternPeriodSeconds: Double = 0.0,
+    val patternSimilarity: Double = 0.0
 )
 
 class RealtimeBeatTracker(
@@ -27,10 +28,10 @@ class RealtimeBeatTracker(
     companion object {
         private const val MIN_BPM = 55
         private const val MAX_BPM = 210
-        private const val MIN_FLASH_CONFIDENCE = 0.40
     }
 
     private val noveltyRate = sampleRate.toDouble() / hopSize
+    private val patternTracker = PatternFlashTracker(noveltyRate)
     private val windowSize = (noveltyRate * 4.0).roundToInt().let { if (it % 2 == 0) it + 1 else it }
     private val analysisHop = max(
         1,
@@ -47,17 +48,12 @@ class RealtimeBeatTracker(
     private val kernelReal = Array(tempoCount) { DoubleArray(windowSize) }
     private val kernelImaginary = Array(tempoCount) { DoubleArray(windowSize) }
 
-    private var frameIndex = 0L
     private var framesSinceAnalysis = 0
-    private var estimateFrame = 0L
-    private var phaseAtEstimate = 0.0
     private var plpBpm = 0.0
     private var correlationBpm = 0.0
     private var plpConfidence = 0.0
     private var correlationConfidence = 0.0
     private var confidence = 0.0
-    private var wasInFlashZone = false
-    private var lastFlashFrame = Long.MIN_VALUE / 2
 
     init {
         for (tempoIndex in 0 until tempoCount) {
@@ -83,7 +79,6 @@ class RealtimeBeatTracker(
         novelty[noveltyWrite] = flux
         noveltyWrite = (noveltyWrite + 1) % windowSize
         noveltyCount = minOf(windowSize, noveltyCount + 1)
-        frameIndex++
 
         framesSinceAnalysis++
         if (framesSinceAnalysis >= analysisHop) {
@@ -91,14 +86,16 @@ class RealtimeBeatTracker(
             updateEstimate()
         }
 
-        val flash = detectFlash()
+        val flash = patternTracker.process(flux)
         return BeatState(
             plpBpm,
             correlationBpm,
             confidence,
             plpConfidence,
             correlationConfidence,
-            flash
+            flash,
+            patternTracker.periodSeconds,
+            patternTracker.patternSimilarity
         )
     }
 
@@ -136,8 +133,6 @@ class RealtimeBeatTracker(
 
         var bestTempoIndex = 0
         var bestMagnitude = -1.0
-        var bestReal = 0.0
-        var bestImaginary = 0.0
         for (tempoIndex in 0 until tempoCount) {
             var real = 0.0
             var imaginary = 0.0
@@ -150,8 +145,6 @@ class RealtimeBeatTracker(
             if (magnitude > bestMagnitude) {
                 bestMagnitude = magnitude
                 bestTempoIndex = tempoIndex
-                bestReal = real
-                bestImaginary = imaginary
             }
         }
 
@@ -196,30 +189,12 @@ class RealtimeBeatTracker(
             .coerceIn(0.0, 1.0)
         val newCorrelationConfidence = 0.5 * selectedCorrelation + 0.5 * prominence
 
-        val omega = 2.0 * PI * newPlpBpm / (60.0 * noveltyRate)
         plpBpm = newPlpBpm
         correlationBpm = newCorrelationBpm
-        phaseAtEstimate = Math.IEEEremainder(
-            omega * (windowSize - 1) + atan2(bestImaginary, bestReal),
-            2.0 * PI
-        )
-        estimateFrame = frameIndex
         plpConfidence = newPlpConfidence
         correlationConfidence = newCorrelationConfidence
         confidence = sqrt(plpConfidence * correlationConfidence)
     }
 
-    private fun detectFlash(): Boolean {
-        if (plpBpm <= 0.0) return false
-        val omega = 2.0 * PI * plpBpm / (60.0 * noveltyRate)
-        val phase = phaseAtEstimate + omega * (frameIndex - estimateFrame)
-        val inFlashZone = cos(phase) > 0.92
-        val minimumGap = (noveltyRate * 60.0 / plpBpm * 0.55).roundToInt()
-        val trigger = confidence >= MIN_FLASH_CONFIDENCE &&
-            inFlashZone && !wasInFlashZone && frameIndex - lastFlashFrame >= minimumGap
-        wasInFlashZone = inFlashZone
-        if (trigger) lastFlashFrame = frameIndex
-        return trigger
-    }
 }
 
